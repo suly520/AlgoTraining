@@ -20,7 +20,7 @@ class Canvas(ABC):
     pygame.init()
     self.screen.fill(self.background)
   
-  def _update_drawing(self, fps=120):
+  def _update_drawing(self, fps=5):
     pygame.display.flip()
     self.clock.tick(fps)
     for event in pygame.event.get():
@@ -78,6 +78,19 @@ class Field(Canvas):
     return m.sqrt((self.target_row- row)**2 + (self.target_col- col)**2)
 
 
+  def _get_min_direction(self, blocks, use_all_blocks=False):
+    
+    if not blocks:
+      raise ValueError("min() arg is an empty sequence")
+    
+    current_min = float("inf")
+    for key in blocks.keys():
+      if blocks[key].h <= current_min and (use_all_blocks or (blocks[key]._is_road or blocks[key]._is_checked)):
+        current_min = blocks[key].h
+        direction = key
+
+    return direction
+
   def _paint_grid(self):
     self.grid.clear()
     self.cur_block_num = self.start_row * self._n_cols + self.start_col
@@ -106,29 +119,13 @@ class Field(Canvas):
       
 
     neigh = self.cur_block.neighbors
-
-    h_values = {direction: block.h for direction, block in neigh.items() if block is not None}
-
-    if h_values:
-        min_h_direction = min(h_values, key=h_values.get)
-
-        # print(h_values)
-        # print(min_h_direction, h_values[min_h_direction])
-        # print()
-
-        self._move(min_h_direction, role="road")
-    else:
-        # Handle the case when all h values are 0
-        # You can adjust this part based on your requirements
-        self._paint_grid()
+   
+    min_h_direction = self._get_min_direction(neigh)
+    self._move(min_h_direction, role="road")
+    
     if self.cur_block._is_target:
-      # print("target reached", self.cur_block.f)
       self._paint_grid()
 
-      h_values.clear()
-    #print()
-
-    #print(max_direction)
 
   def _move(self, direction, role="current", check=False):
       self.row, self.col = divmod(self.cur_block_num, self._n_cols)
@@ -139,7 +136,6 @@ class Field(Canvas):
       new_row = self.row + move[0]
       new_col = self.col + move[1]
       if not (0 <= new_row < self._n_rows and 0 <= new_col < self._n_cols):
-        print("halt")
         return False
       
       next_block = self.grid[new_row][new_col]
@@ -149,7 +145,7 @@ class Field(Canvas):
         return False
   
       if check:
-        if next_block._is_checked or next_block._is_obstacle or next_block._is_road or next_block._is_start:
+        if next_block._is_obstacle or next_block._is_start:
           return False
         else:
           next_block._is_checked = True
@@ -198,6 +194,6 @@ class Field(Canvas):
        
 
 
-can = Field(1400,2000,20,"purple")
+can = Field(800,800,100,"purple")
 
 can.draw_scene()
