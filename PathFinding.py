@@ -4,6 +4,7 @@ import math as m
 from abc import ABC, abstractmethod
 from overrides import overrides
 import random
+from Block import Block
 
 class Canvas(ABC):
   
@@ -19,7 +20,7 @@ class Canvas(ABC):
     pygame.init()
     self.screen.fill(self.background)
   
-  def _update_drawing(self, fps=60):
+  def _update_drawing(self, fps=120):
     pygame.display.flip()
     self.clock.tick(fps)
     for event in pygame.event.get():
@@ -43,43 +44,8 @@ class Canvas(ABC):
   @abstractmethod
   def _draw(self): ...
 
-
-
-class Block:
-  ROLES = {
-        "start": ("green", False),
-        "target": ("blue", False),
-        "obstacle": ("black", False),
-        "checked": ("pink", False),
-        "default": ("white", True)
-  }
-
-  def __init__(self, x, y, w, role="") -> None:
-    self.rect = pygame.Rect(x, y, w, w)
-    self._f = 0
-    self._g = 0
-    self._h = 0
-    self.role = role
-    self.set_role(role)
-    self.row = 0
-    self.col = 0
-    
-  
-  def set_role(self, role):
-    self.role = role
-    self.colour, _ = self.ROLES.get(role, self.ROLES["default"])
-    self._is_start = role == "start"
-    self._is_target = role == "target"
-    self._is_obstacle = role == "obstacle"
-    self._is_checked = role == "checked"
-    
-  def set_cost(self, g=None, h=None):
-    self._g = g if g != None else self._g
-    self._h = h if h != None else self._h
-    self._f = self._g + self._h
-
 class Field(Canvas):
-  OBSTICALES = False
+  OBSTICALES = True
   moves = {
           "right": (0, 1),
           "down": (1, 0),
@@ -91,9 +57,15 @@ class Field(Canvas):
     self._w = block_width
     self._n_rows = width//self._w
     self._n_cols = height//self._w
-    self.cur_block_num = 0
-    self.h_dist = 0
-    self.g_dist = 0
+    self.start_row = 0
+    self.start_col = 0
+    self.start_block = None
+    self.cur_block_num = self.start_row * self._n_cols + self.start_col
+    self.cur_block = None
+    self.target_row = self._n_rows-1
+    self.target_col = self._n_cols-1-5
+    self.target_block = None
+    self.auto = False
 
     super().__init__(1 + self._n_cols * (1 + self._w), 1 + self._n_rows * (1 + self._w), background)
     # self.grid = [[Block(1 + col_pos * (1 + self._w), 1 + row_pos * (1 + self._w), self._w) 
@@ -102,10 +74,13 @@ class Field(Canvas):
     self.grid = []
     self._paint_grid()
 
-  def get_h(self):
-    self.h_dist = self._n_rows+self._n_cols - self.cur_block_num
+  def _calculate_h(self, row, col):
+    return m.sqrt((self.target_row- row)**2 + (self.target_col- col)**2)
+
 
   def _paint_grid(self):
+    self.grid.clear()
+    self.cur_block_num = self.start_row * self._n_cols + self.start_col
     for row_pos in range(self._n_rows):
       row = []
       for col_pos in range(self._n_cols):
@@ -116,53 +91,90 @@ class Field(Canvas):
 
       self.grid.append(row)
 
-    self.grid[0][0].set_role("start")
-    self.grid[self._n_rows-1][self._n_cols-1].set_role("target")
+    self.start_block = self.grid[self.start_row][self.start_col]
+    self.start_block.set_start()
+    self.cur_block = self.start_block
+    self.target_block = self.grid[self.target_row][self.target_col]
+    self.target_block.set_target()
   
-  # def check_surrounding(self):
-  #   while True:
-  #     useable =self._move(self.grid[self.row][self.col].role)
-  #     next_block:Block = self.grid[self.row][self.col]
-  #     if useable:
-
-  #       next_block.set_cost()
-  #       continue
-  #     if next_block._is_target:
-  #       print("congrats found")
-
-
-
-
-
-
-  def _move(self, role, direction, clear=False):
-      self.row, self.col = divmod(self.cur_block_num, self._n_cols)
+  def check_suroundings(self):
+    self.cur_block.neighbors.clear()
+    self._move("up", check=True),
+    self._move("down", check=True),
+    self._move("right", check=True),
+    self._move("left", check=True)
       
+
+    neigh = self.cur_block.neighbors
+
+    h_values = {direction: block.h for direction, block in neigh.items() if block is not None}
+
+    if h_values:
+        min_h_direction = min(h_values, key=h_values.get)
+
+        # print(h_values)
+        # print(min_h_direction, h_values[min_h_direction])
+        # print()
+
+        self._move(min_h_direction, role="road")
+    else:
+        # Handle the case when all h values are 0
+        # You can adjust this part based on your requirements
+        self._paint_grid()
+    if self.cur_block._is_target:
+      # print("target reached", self.cur_block.f)
+      self._paint_grid()
+
+      h_values.clear()
+    #print()
+
+    #print(max_direction)
+
+  def _move(self, direction, role="current", check=False):
+      self.row, self.col = divmod(self.cur_block_num, self._n_cols)
       move = self.moves.get(direction)
       if move is None:
-          return False
+        return False
 
       new_row = self.row + move[0]
       new_col = self.col + move[1]
-      if not (0 <= new_row < self._n_rows and not self.grid[new_row][new_col]._is_obstacle and 0 <= new_col < self._n_cols):
+      if not (0 <= new_row < self._n_rows and 0 <= new_col < self._n_cols):
+        print("halt")
+        return False
+      
+      next_block = self.grid[new_row][new_col]
+      next_pos = new_row * self._n_cols + new_col
+
+      if next_block._is_obstacle:
+        return False
+  
+      if check:
+        if next_block._is_checked or next_block._is_obstacle or next_block._is_road or next_block._is_start:
           return False
+        else:
+          next_block._is_checked = True
+          next_block.h = self._calculate_h(new_row, new_col)
+          self.cur_block.neighbors[direction] = next_block 
+          return True
 
-      if clear:
-          self.grid[self.row][self.col].set_role("None")
-      else:
-          self.grid[self.row][self.col].set_role(role)
-
-      self.grid[new_row][new_col].set_role(role)
-      self.cur_block_num = new_row * self._n_cols + new_col
+      self.cur_block_num = next_pos
+      self.cur_block = next_block
       self.row = new_row
       self.col = new_col
+      self.cur_block.g = self.cur_block.g+1
+      self.cur_block.set_role(role)
       return True
+
 
   @overrides
   def _draw(self):
+    if self.auto:
+      self.check_suroundings()
     for row in self.grid:
       for block in row:
           pygame.draw.rect(self.screen, block.colour, block.rect)
+    
+    
 
   @overrides
   def _handle_event(self, event):
@@ -170,16 +182,22 @@ class Field(Canvas):
  
     if event.type == pygame.KEYDOWN:
       if event.key == pygame.K_UP:
-        self._move("start", "up")
+        self._move("up")
       if event.key == pygame.K_DOWN:
-        self._move("start", "down")
+        self._move("down")
       if event.key == pygame.K_RIGHT:
-        self._move("start", "right")
+        self._move("right")
       if event.key == pygame.K_LEFT:
-        self._move("start", "left")
+        self._move("left")
+      if event.key == pygame.K_RETURN:
+        self.check_suroundings()
+      if event.key == pygame.K_BACKSPACE:
+        self._paint_grid()
+      if event.key == pygame.K_HASH:
+        self.auto = not self.auto
        
 
 
-can = Field(800,800,20,"purple")
+can = Field(1400,2000,20,"purple")
 
 can.draw_scene()
