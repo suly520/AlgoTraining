@@ -1,50 +1,13 @@
 # Example file showing a basic pygame "game loop"
 import pygame
 import math as m
-from abc import ABC, abstractmethod
+from Canvas import Canvas
 from overrides import overrides
 import random
 from Block import Block
 
-class Canvas(ABC):
-  
-  def __init__(self, width, height, background):
-    self.width = width
-    self.height = height
-    self.screen = pygame.display.set_mode((width, height))
-    self.clock = pygame.time.Clock()
-    self.background = background
-    self.running = True
 
-  def _init_drawing(self):
-    pygame.init()
-    self.screen.fill(self.background)
-  
-  def _update_drawing(self, fps=5):
-    pygame.display.flip()
-    self.clock.tick(fps)
-    for event in pygame.event.get():
-      self._handle_event(event)
-
-  def _handle_event(self, event):
-    if event.type == pygame.QUIT:
-      self.running = False
-
-  def _quit(self):
-    pygame.quit()
-
-  def draw_scene(self):
-    """needs to be"""
-    while self.running:
-      self._init_drawing()
-      self._draw()
-      self._update_drawing()
-    self._quit()
-
-  @abstractmethod
-  def _draw(self): ...
-
-class Field(Canvas):
+class PathFinder(Canvas):
   OBSTICALES = True
   moves = {
           "right": (0, 1),
@@ -68,9 +31,6 @@ class Field(Canvas):
     self.auto = False
 
     super().__init__(1 + self._n_cols * (1 + self._w), 1 + self._n_rows * (1 + self._w), background)
-    # self.grid = [[Block(1 + col_pos * (1 + self._w), 1 + row_pos * (1 + self._w), self._w) 
-    #               for col_pos in range(self._n_cols)] for row_pos in range(self._n_rows)]
-    # self.grid[self.cur_block_num // self._n_cols][self.cur_block_num % self._n_cols].set_role("start")
     self.grid = []
     self._paint_grid()
 
@@ -78,18 +38,41 @@ class Field(Canvas):
     return m.sqrt((self.target_row- row)**2 + (self.target_col- col)**2)
 
 
-  def _get_min_direction(self, blocks, use_all_blocks=False):
-    
+  def _get_min_direction(self, blocks, its_a_trap=False):
     if not blocks:
       raise ValueError("min() arg is an empty sequence")
     
     current_min = float("inf")
     for key in blocks.keys():
-      if blocks[key].h <= current_min and (use_all_blocks or (blocks[key]._is_road or blocks[key]._is_checked)):
-        current_min = blocks[key].h
-        direction = key
-
+      if not (blocks[key].h <= current_min):
+        # current distance is smaller than prev and if we are in a trap, block is a road or checked
+        continue
+      if its_a_trap:
+        if not (blocks[key]._is_road or blocks[key]._is_checked):
+          # not a road or checked blocked while in a trap
+          continue
+      elif blocks[key]._is_road or blocks[key]._is_checked:
+        continue
+      current_min = blocks[key].h
+      direction = key
     return direction
+
+  def _get_min_direction_new(self, blocks, its_a_trap=False):
+    if not blocks:
+        raise ValueError("min() arg is an empty sequence")
+
+    # Define a function for the key parameter of min()
+    def key_func(block_key):
+        block = blocks[block_key]
+        # If we're in a trap, consider only road or checked blocks
+        if its_a_trap:
+            return float('inf') if not (block._is_road or block._is_checked) else block.h
+        # Otherwise, consider blocks that are not road or checked
+        else:
+            return float('inf') if (block._is_road or block._is_checked) else block.h
+
+    # Find the key with the minimum value according to key_func
+    return min(blocks, key=key_func)
 
   def _paint_grid(self):
     self.grid.clear()
@@ -101,7 +84,6 @@ class Field(Canvas):
         if self.OBSTICALES and random.randint(0,10) == 5 and row_pos+col_pos != 0 and row_pos+col_pos != self._n_rows+self._n_cols:
           new_block.set_role("obstacle")
         row.append(new_block)
-
       self.grid.append(row)
 
     self.start_block = self.grid[self.start_row][self.start_col]
@@ -110,19 +92,17 @@ class Field(Canvas):
     self.target_block = self.grid[self.target_row][self.target_col]
     self.target_block.set_target()
   
-  def check_suroundings(self):
+  def move_to_best(self):
     self.cur_block.neighbors.clear()
     self._move("up", check=True),
     self._move("down", check=True),
     self._move("right", check=True),
     self._move("left", check=True)
-      
-
+  
     neigh = self.cur_block.neighbors
-   
+
     min_h_direction = self._get_min_direction(neigh)
     self._move(min_h_direction, role="road")
-    
     if self.cur_block._is_target:
       self._paint_grid()
 
@@ -131,21 +111,27 @@ class Field(Canvas):
       self.row, self.col = divmod(self.cur_block_num, self._n_cols)
       move = self.moves.get(direction)
       if move is None:
+        # wrong direction input
         return False
 
       new_row = self.row + move[0]
       new_col = self.col + move[1]
       if not (0 <= new_row < self._n_rows and 0 <= new_col < self._n_cols):
+        # outside the grid
         return False
       
       next_block = self.grid[new_row][new_col]
       next_pos = new_row * self._n_cols + new_col
 
-      if next_block._is_obstacle:
+      if next_block._is_obstacle and not check:
+        # block is obsticale
         return False
   
       if check:
-        if next_block._is_obstacle or next_block._is_start:
+        if next_block._is_obstacle:
+          return False
+        if next_block._is_start:
+          # skip start block as best path option
           return False
         else:
           next_block._is_checked = True
@@ -165,7 +151,7 @@ class Field(Canvas):
   @overrides
   def _draw(self):
     if self.auto:
-      self.check_suroundings()
+      self.move_to_best()
     for row in self.grid:
       for block in row:
           pygame.draw.rect(self.screen, block.colour, block.rect)
@@ -186,14 +172,13 @@ class Field(Canvas):
       if event.key == pygame.K_LEFT:
         self._move("left")
       if event.key == pygame.K_RETURN:
-        self.check_suroundings()
+        self.move_to_best()
       if event.key == pygame.K_BACKSPACE:
         self._paint_grid()
       if event.key == pygame.K_HASH:
         self.auto = not self.auto
        
 
-
-can = Field(800,800,100,"purple")
-
-can.draw_scene()
+if __name__ == "__main__":
+  can = PathFinder(800,800,10,"purple")
+  can.draw_scene()
